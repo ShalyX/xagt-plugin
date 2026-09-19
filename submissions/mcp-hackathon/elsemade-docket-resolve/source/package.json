@@ -1,0 +1,16 @@
+{
+  "name": "docket-resolve",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "description": "Deterministic settlement recommendations for agent-to-agent work.",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "check": "node --check src/evaluate.js && node --check src/http.js && node --check src/server.js && node --check api/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

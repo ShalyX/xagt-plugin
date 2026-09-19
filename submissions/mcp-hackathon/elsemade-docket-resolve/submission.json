@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "name": "Docket Resolve",
+  "slug": "elsemade-docket-resolve",
+  "sourceRepository": "https://github.com/ShalyX/docket-resolve",
+  "reviewCommit": "f74c35643669646c7a8634c6570bb85a095dc3af",
+  "apiBaseUrl": "https://docket-resolve.vercel.app/v1",
+  "healthCheckUrl": "https://docket-resolve.vercel.app/health",
+  "deploymentProofUrl": "https://docket-resolve.vercel.app/.well-known/xagent-verification.json"
+}

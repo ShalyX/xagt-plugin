@@ -1,0 +1,90 @@
+{
+  "agreementId": "agent-build-2026-019",
+  "amountAtomic": 250000000,
+  "asset": {
+    "symbol": "USDC",
+    "decimals": 6
+  },
+  "policy": {
+    "conflictSpread": 35,
+    "criticalFailureCapPercent": 20
+  },
+  "criteria": [
+    {
+      "id": "api-live",
+      "description": "Production API is reachable and returns the documented schema.",
+      "weight": 50,
+      "critical": true,
+      "minimumEvidence": 1
+    },
+    {
+      "id": "docs",
+      "description": "A new agent can reproduce one real call from the documentation.",
+      "weight": 30,
+      "critical": false,
+      "minimumEvidence": 1
+    },
+    {
+      "id": "edge-cases",
+      "description": "Invalid and conflicting inputs fail safely with useful errors.",
+      "weight": 20,
+      "critical": false,
+      "minimumEvidence": 1
+    }
+  ],
+  "evidence": [
+    {
+      "id": "ev-smoke",
+      "criterionId": "api-live",
+      "kind": "automated_test",
+      "uri": "https://example.com/proofs/smoke-test.json",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "result": "pass"
+    },
+    {
+      "id": "ev-docs",
+      "criterionId": "docs",
+      "kind": "artifact",
+      "uri": "https://example.com/docs/quickstart",
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "result": "pass"
+    },
+    {
+      "id": "ev-errors",
+      "criterionId": "edge-cases",
+      "kind": "automated_test",
+      "uri": "https://example.com/proofs/error-cases.json",
+      "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "result": "pass"
+    }
+  ],
+  "findings": [
+    {
+      "id": "finding-api",
+      "criterionId": "api-live",
+      "evaluator": "review-agent-a",
+      "score": 100,
+      "confidence": 1,
+      "evidenceIds": ["ev-smoke"],
+      "rationale": "The production smoke test passed twice."
+    },
+    {
+      "id": "finding-docs",
+      "criterionId": "docs",
+      "evaluator": "review-agent-a",
+      "score": 90,
+      "confidence": 0.95,
+      "evidenceIds": ["ev-docs"],
+      "rationale": "The documented call reproduced with one minor wording ambiguity."
+    },
+    {
+      "id": "finding-errors",
+      "criterionId": "edge-cases",
+      "evaluator": "review-agent-b",
+      "score": 75,
+      "confidence": 0.9,
+      "evidenceIds": ["ev-errors"],
+      "rationale": "Malformed requests fail safely; one optional boundary case is absent."
+    }
+  ]
+}
