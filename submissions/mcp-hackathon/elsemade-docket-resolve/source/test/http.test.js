@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 
+import { FixtureReviewProvider } from "../src/ai/providers.js";
 import { createRequestHandler } from "../src/http.js";
 
 const commit = "c".repeat(40);
@@ -12,6 +13,7 @@ async function withServer(run) {
       commit,
       slug: "elsemade-docket-resolve",
       allowedOrigin: "*",
+      reviewProvider: new FixtureReviewProvider(),
     }),
   );
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -87,6 +89,15 @@ test("serves the X-Agent deployment proof from the same origin", async () => {
   });
 });
 
+test("serves the controlled demo evidence as a reachable public fixture", async () => {
+  await withServer(async (origin) => {
+    const response = await fetch(`${origin}/fixtures/evidence/ev-smoke.txt`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "text/plain; charset=utf-8");
+    assert.match(await response.text(), /FIXTURE_SCORE: 100/);
+  });
+});
+
 test("evaluates a valid agreement over HTTP", async () => {
   await withServer(async (origin) => {
     const response = await fetch(`${origin}/v1/evaluations`, {
@@ -99,6 +110,27 @@ test("evaluates a valid agreement over HTTP", async () => {
     assert.equal(response.status, 200);
     assert.equal(body.decision, "release_full");
     assert.equal(body.recommendedReleaseAtomic, 50_000_000);
+  });
+});
+
+test("reviews evidence over HTTP without giving the reviewer payment authority", async () => {
+  await withServer(async (origin) => {
+    const input = agreement();
+    input.findings = [];
+    const response = await fetch(`${origin}/v1/reviews`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        agreement: input,
+        evidenceContent: [{ id: "e_delivery", content: "The artifact is present." }],
+      }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.readyToResolve, true);
+    assert.equal(body.findings[0].evidenceIds[0], "e_delivery");
+    assert.equal("recommendedReleaseAtomic" in body, false);
   });
 });
 
@@ -175,6 +207,8 @@ test("serves the reviewer-facing evaluation workspace", async () => {
     assert.equal(response.status, 200);
     assert.match(response.headers.get("content-type"), /^text\/html/);
     assert.match(html, /Docket Resolve/);
-    assert.match(html, /Run evaluation/);
+    assert.match(html, /Open case/);
+    assert.match(html, /Review evidence/);
+    assert.match(html, /Retrieval failures/);
   });
 });

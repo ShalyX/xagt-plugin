@@ -5,7 +5,7 @@ export function createOpenApiDocument({ origin = "http://localhost:3000" } = {})
       title: "Docket Resolve API",
       version: "0.1.0",
       description:
-        "Deterministic, explainable settlement recommendations for agent-to-agent work.",
+        "AI-assisted, explainable proportional settlement recommendations for agent-to-agent work.",
     },
     servers: [{ url: origin }],
     paths: {
@@ -21,6 +21,20 @@ export function createOpenApiDocument({ origin = "http://localhost:3000" } = {})
           operationId: "getXAgentVerification",
           summary: "Bind this origin to the X-Agent submission slug and commit.",
           responses: { 200: { description: "Deployment proof" } },
+        },
+      },
+      "/mcp": {
+        post: {
+          operationId: "mcpMessage",
+          summary: "MCP Streamable HTTP endpoint for agent-callable Docket tools.",
+          security: [{ BearerAuth: [] }],
+          description:
+            "Use an MCP client and the official protocol transport. Tools recommend settlements only; they never move funds.",
+          responses: {
+            200: { description: "MCP JSON-RPC response" },
+            401: { description: "Authentication required in production" },
+            404: { description: "Unknown MCP method" },
+          },
         },
       },
       "/v1/evaluations": {
@@ -51,9 +65,130 @@ export function createOpenApiDocument({ origin = "http://localhost:3000" } = {})
           },
         },
       },
+      "/v1/reviews": {
+        post: {
+          operationId: "reviewCaseEvidence",
+          summary: "Review evidence against agreement criteria.",
+          description:
+            "Produces cited, confidence-scored findings. It does not choose or move a settlement amount.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["agreement"],
+                  properties: {
+                    agreement: { $ref: "#/components/schemas/Agreement" },
+                    evidenceContent: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        required: ["id", "content"],
+                        properties: {
+                          id: { type: "string" },
+                          content: { type: "string", maxLength: 24000 },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "Structured AI or fixture review" },
+            400: { description: "Malformed JSON" },
+            413: { description: "Request body too large" },
+            415: { description: "Unsupported media type" },
+            422: { description: "Review request failed validation" },
+            503: { description: "Review provider unavailable" },
+          },
+        },
+      },
+      "/v1/cases": {
+        get: {
+          operationId: "listCases",
+          summary: "List cases for the authenticated tenant.",
+          security: [{ BearerAuth: [] }],
+          responses: {
+            200: { description: "Tenant-scoped case summaries" },
+            401: { description: "Authentication required" },
+          },
+        },
+        post: {
+          operationId: "createCase",
+          summary: "Persist an agreement as a tenant-scoped case.",
+          description: "Use Idempotency-Key for safe retries. Creating a case does not review evidence or move funds.",
+          security: [{ BearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { type: "object", required: ["agreement"], properties: { agreement: { $ref: "#/components/schemas/Agreement" } } } } },
+          },
+          responses: {
+            201: { description: "Case created" },
+            200: { description: "Idempotent replay" },
+            401: { description: "Authentication required" },
+            422: { description: "Agreement failed validation" },
+          },
+        },
+      },
+      "/v1/cases/{caseId}": {
+        get: {
+          operationId: "getCase",
+          summary: "Read a tenant-scoped case and its event history.",
+          security: [{ BearerAuth: [] }],
+          parameters: [{ name: "caseId", in: "path", required: true, schema: { type: "string" } }],
+          responses: { 200: { description: "Case record" }, 401: { description: "Authentication required" }, 404: { description: "Case not found" } },
+        },
+      },
+      "/v1/cases/{caseId}/retrieve": {
+        post: {
+          operationId: "retrieveEvidence",
+          summary: "Fetch HTTPS evidence and verify its declared digest.",
+          security: [{ BearerAuth: [] }],
+          parameters: [{ name: "caseId", in: "path", required: true, schema: { type: "string" } }, { $ref: "#/components/parameters/IdempotencyKey" }],
+          responses: { 200: { description: "Evidence retrieval result" }, 401: { description: "Authentication required" }, 404: { description: "Case not found" } },
+        },
+      },
+      "/v1/cases/{caseId}/review": {
+        post: {
+          operationId: "reviewPersistedCase",
+          summary: "Review and persist cited findings for a case.",
+          security: [{ BearerAuth: [] }],
+          parameters: [{ name: "caseId", in: "path", required: true, schema: { type: "string" } }, { $ref: "#/components/parameters/IdempotencyKey" }],
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { evidenceContent: { $ref: "#/components/schemas/EvidenceContent" }, retrieveEvidence: { type: "boolean" } } } } } },
+          responses: { 200: { description: "Review result and persisted case event" }, 401: { description: "Authentication required" }, 404: { description: "Case not found" }, 503: { description: "Review provider unavailable" } },
+        },
+      },
+      "/v1/cases/{caseId}/resolve": {
+        post: {
+          operationId: "resolvePersistedCase",
+          summary: "Resolve a reviewed case into a proportional recommendation.",
+          security: [{ BearerAuth: [] }],
+          parameters: [{ name: "caseId", in: "path", required: true, schema: { type: "string" } }, { $ref: "#/components/parameters/IdempotencyKey" }],
+          responses: { 200: { description: "Recommendation-only settlement result" }, 401: { description: "Authentication required" }, 409: { description: "Case has not been reviewed" }, 404: { description: "Case not found" } },
+        },
+      },
     },
     components: {
+      securitySchemes: {
+        BearerAuth: { type: "http", scheme: "bearer", bearerFormat: "opaque agent token" },
+      },
+      parameters: {
+        IdempotencyKey: { name: "Idempotency-Key", in: "header", required: false, schema: { type: "string", maxLength: 200 } },
+      },
       schemas: {
+        EvidenceContent: {
+          type: "array",
+          maxItems: 200,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["id", "content"],
+            properties: { id: { type: "string" }, content: { type: "string", maxLength: 24000 } },
+          },
+        },
         Criterion: {
           type: "object",
           additionalProperties: false,

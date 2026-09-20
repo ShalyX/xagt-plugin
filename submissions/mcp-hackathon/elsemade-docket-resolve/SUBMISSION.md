@@ -1,57 +1,72 @@
 # Docket Resolve
 
+## Track
+
+Open Innovation Challenge.
+
 ## Capability
 
-- **One-line description:** Turns structured evidence about agent-to-agent work into a deterministic, explainable settlement recommendation.
-- **Who it helps:** Agent marketplaces, orchestrators, review agents, and human operators handling acceptance disputes.
-- **Capability boundary:** Docket Resolve calculates a proportional release-or-hold recommendation from a declared agreement, weighted criteria, evidence references, and evaluator findings. It does not move funds, inspect private artifacts, or claim that cited evidence is true.
+Docket Resolve is an evidence-grounded dispute and settlement workflow for AI agents. It turns a frozen acceptance agreement into cited criterion findings, a review trail, and an explainable proportional release-or-hold recommendation.
 
-## Live API
+The important output is proportional settlement: an agent does not have to choose between paying everything and paying nothing. If weighted work is partly complete, Docket calculates the earned share and keeps the remainder on hold. Uncertain, conflicting, or unsupported findings fail closed into human review.
+
+The AI reviewer is Gemini, configured server-side. The model proposes structured, evidence-cited findings; local schema validation and the settlement kernel remain authoritative. Docket never moves funds and never gives the reviewer payment authority.
+
+## Live service
 
 - **API base URL:** https://docket-resolve.vercel.app/v1
 - **Health-check URL:** https://docket-resolve.vercel.app/health
-- **Authentication:** None.
-- **Rate limits / known limits:** Request bodies are capped at 256 KiB. Amounts must be positive safe integers no greater than 90,071,992,547,409 atomic units. There is no application-level rate limiter; Vercel platform limits apply. Evaluations are synchronous and normally complete within one request.
-- **API contract:** `source/src/openapi.js` serves the OpenAPI document at `GET /openapi.json`. The capability endpoint is `POST /v1/evaluations` with `application/json`.
-
-## Source and reproducibility
-
+- **Deployment proof:** https://docket-resolve.vercel.app/.well-known/xagent-verification.json
+- **Review commit:** `c410c6068c9642320b6c7431034773048934d8d9`
 - **Source repository:** https://github.com/ShalyX/docket-resolve
-- **Review commit:** `f74c35643669646c7a8634c6570bb85a095dc3af`
-- **Source submitted in this PR:** `source/`
-- **Run tests:** `npm ci && npm test && npm run check`
-- **Run locally:** `npm ci && npm start`, then open `http://localhost:3000`
-- **Deploy:** Link the repository in Vercel, retain the service configuration in `vercel.json`, set `XAGT_COMMIT=f74c35643669646c7a8634c6570bb85a095dc3af` and `XAGT_SLUG=elsemade-docket-resolve`, then deploy from the repository root.
-- **Version binding:** The same deployment reports the reviewed commit from both `/health` and `/.well-known/xagent-verification.json`.
 
-The API exposes:
+The public demo is callable without a bearer token. The same service supports `DOCKET_AUTH_MODE=required` with bearer-token-to-tenant profiles for remote MCP agents; tenant-scoped case reads and writes are covered by the included tests.
 
-```json
-{"status":"ok","commit":"f74c35643669646c7a8634c6570bb85a095dc3af"}
+## Agent and MCP workflow
+
+The persisted production sequence is:
+
+1. `docket_create_case` freezes the agreement in a tenant-scoped case.
+2. `docket_retrieve_evidence` fetches HTTPS references, checks the declared SHA-256 digest, and persists verified results or explicit failures.
+3. `docket_review_persisted_case` sends bounded evidence to Gemini and saves cited findings.
+4. `docket_resolve_case` runs the proportional settlement kernel and records a recommendation-only settlement.
+
+The HTTP MCP endpoint is available at `POST/GET /mcp`. The source package also includes a stdio MCP entrypoint for trusted local agents. The API and MCP surfaces expose the same review boundary: AI suggests findings, while Docket validates citations and calculates the settlement.
+
+## Reproducibility
+
+From `source/`:
+
+```bash
+npm ci
+npm test
+npm run check
 ```
 
-```json
-{"schemaVersion":1,"slug":"elsemade-docket-resolve","commit":"f74c35643669646c7a8634c6570bb85a095dc3af"}
-```
+The suite contains 40 passing tests covering Gemini adapter validation, evidence retrieval and digest checks, all-failed retrieval handling, persistence, idempotency, authentication, tenant isolation, MCP discovery, the full case lifecycle, proportional settlement, manual review, and the reviewer workspace.
 
-## Verification
+The controlled demo evidence is reachable from the deployed service at `/fixtures/evidence/ev-smoke.txt`, `/fixtures/evidence/ev-docs.txt`, and `/fixtures/evidence/ev-errors.txt`. These are sample evidence artifacts for repeatable verification; the AI review provider is Gemini, not a fixture provider. The all-failed evidence path remains an explicit regression test.
 
-The reproducible call instructions and redacted example responses are in `verification/README.md`.
+## Expected result
 
-- **Health-check result:** HTTP 200 with `status: ok` and the exact 40-character review commit.
-- **Capability call:** `POST /v1/evaluations` with `source/examples/agreement.json`. The deterministic example recommends releasing 230,000,000 of 250,000,000 atomic units and holding 20,000,000, a 92% release.
-- **Expected error behavior:** Malformed JSON returns 400; oversized bodies return 413; a non-JSON content type returns 415; invalid agreements return a structured 422 response. Materially conflicting evaluator findings return HTTP 200 with `decision: manual_review` and no financial recommendation.
+The example agreement weighs API delivery at 50%, documentation at 30%, and edge-case handling at 20%. Its declared findings score 100, 90, and 75, producing:
 
-## Security and data handling
+- **Decision:** `release_partial`
+- **Agreed amount:** 250 USDC
+- **Recommended release:** 230 USDC
+- **Recommended hold:** 20 USDC
+- **Settlement ratio:** 92%
 
-- **Data collected:** The request contains an agreement identifier, asset denomination, amount, policy values, criteria, public evidence references and digests, evaluator identifiers, scores, confidence values, and rationales.
-- **Purpose and retention:** Data is used only to compute the response in memory. The application does not persist request bodies or evidence content.
-- **Third parties / outbound network calls:** None. Evidence URLs are treated as references and are never fetched by the service. Vercel hosts the public deployment.
-- **Secrets:** No secrets are committed. Review access is supplied only through an approved private channel when required.
-- **Known risks / restrictions:** This is a recommendation engine, not an escrow, oracle, payment processor, or proof verifier. A caller must independently verify evidence and retain authority over any payment action. CORS defaults to all origins for public review and can be narrowed with `ALLOWED_ORIGIN`.
+## Safety and data handling
 
-## Support
+- Recommendations only: no wallet, escrow, or payment authority is present.
+- Evidence is treated as untrusted input and must be cited by the model; invalid citations fail local validation.
+- HTTPS retrieval uses bounded time and size limits, DNS/private-network checks, explicit production host allowlists, and SHA-256 verification.
+- Prompt-injection text inside evidence is not treated as policy.
+- Requests and evidence are not written to request logs.
+- The Gemini credential is server-side only and is excluded from the submitted source.
+- The included JSON file store is durable for a single process or single-host deployment; a multi-instance launch should replace it with a transactional shared database.
 
-- **Team / builder:** ShalyX, publishing as ElseMade
-- **Contact:** https://github.com/ShalyX
-- **License / rights:** First-party source is submitted as UNLICENSED. The submitter confirms the review and archive authorization in `RIGHTS.md`; no third-party runtime code is bundled.
+## Rights
+
+See `RIGHTS.md`. The source package is complete and contains no credentials or private user data.

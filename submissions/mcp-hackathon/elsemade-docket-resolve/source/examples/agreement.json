@@ -37,24 +37,24 @@
       "id": "ev-smoke",
       "criterionId": "api-live",
       "kind": "automated_test",
-      "uri": "https://example.com/proofs/smoke-test.json",
-      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "uri": "https://docket-resolve.vercel.app/fixtures/evidence/ev-smoke.txt",
+      "digest": "sha256:7a06fea670b648b816b370c13260b8ea0e43fbe40407f783b7b48be78d6b6188",
       "result": "pass"
     },
     {
       "id": "ev-docs",
       "criterionId": "docs",
       "kind": "artifact",
-      "uri": "https://example.com/docs/quickstart",
-      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "uri": "https://docket-resolve.vercel.app/fixtures/evidence/ev-docs.txt",
+      "digest": "sha256:7fae5aa4fbdcda611ce6166302da0dddda7fe3628ccd702ed9b214e8b07af9b5",
       "result": "pass"
     },
     {
       "id": "ev-errors",
       "criterionId": "edge-cases",
       "kind": "automated_test",
-      "uri": "https://example.com/proofs/error-cases.json",
-      "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "uri": "https://docket-resolve.vercel.app/fixtures/evidence/ev-errors.txt",
+      "digest": "sha256:825a550e10bc7cb366385f3932effcae419432e1f4c21fc860dc1a405f16c0da",
       "result": "pass"
     }
   ],
