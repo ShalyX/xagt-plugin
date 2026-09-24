@@ -48,17 +48,29 @@ function parseTokenProfiles(raw) {
 }
 
 export function createAuthConfig(environment = process.env) {
+  const mode = environment.DOCKET_AUTH_MODE;
+  if (mode && mode !== "off" && mode !== "required") {
+    throw new Error("DOCKET_AUTH_MODE must be either off or required.");
+  }
   const tokens = parseTokenProfiles(environment.DOCKET_AUTH_TOKENS);
   const legacyToken = environment.DOCKET_AUTH_TOKEN;
   if (legacyToken) {
+    if (legacyToken.length < 12) {
+      throw new Error("DOCKET_AUTH_TOKEN must be at least 12 characters.");
+    }
     tokens.set(legacyToken, normalizeProfile({
       tenantId: environment.DOCKET_AUTH_TENANT ?? "tenant-local",
       subject: environment.DOCKET_AUTH_SUBJECT ?? "local-agent",
       scopes: ["*"],
     }, legacyToken));
   }
+  const explicitlyPublic = environment.DOCKET_AUTH_MODE === "off";
+  const required = !explicitlyPublic && (environment.DOCKET_AUTH_MODE === "required" || environment.NODE_ENV === "production");
+  if (required && tokens.size === 0) {
+    throw new Error("Authenticated production mode requires at least one configured bearer token.");
+  }
   return {
-    required: environment.DOCKET_AUTH_MODE === "required" || environment.NODE_ENV === "production",
+    required,
     tokens,
   };
 }

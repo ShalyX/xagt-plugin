@@ -9,7 +9,7 @@ The submitter confirms that they own, or have sufficient authorization for, the 
 
 Subject to the official program terms, the submitter authorizes X-Agent to retain, reproduce, audit, test, archive, and publish the submitted program artifact for judging, fraud prevention, dispute handling, ecosystem submission, and post-award accountability. Closing the pull request, deleting a fork, or deleting an external repository does not revoke the official archive rights attached to an accepted and rewarded entry.
 
-Third-party components and their licenses: No third-party source or runtime npm packages are bundled. The service runs on Node.js standard-library APIs and is hosted on Vercel; those platforms are not redistributed in this submission.
+Third-party components and their licenses: `@modelcontextprotocol/client` 2.0.0 (MIT), `@modelcontextprotocol/node` 2.0.0 (MIT), `@modelcontextprotocol/server` 2.0.0 (MIT), and `zod` 4.6.5 (MIT). Their source and generated dependency directories are not bundled; exact runtime versions are declared in `source/package.json` and `source/package-lock.json`. Node.js and Vercel are execution platforms and are not redistributed in this submission.
 
 Exceptions or restrictions: The first-party project remains UNLICENSED outside the review, archive, testing, and publication authorization granted above.
 

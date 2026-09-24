@@ -17,7 +17,7 @@ The AI reviewer is Gemini, configured server-side. The model proposes structured
 - **API base URL:** https://docket-resolve.vercel.app/v1
 - **Health-check URL:** https://docket-resolve.vercel.app/health
 - **Deployment proof:** https://docket-resolve.vercel.app/.well-known/xagent-verification.json
-- **Review commit:** `c410c6068c9642320b6c7431034773048934d8d9`
+- **Review commit:** `a05274938888c1ead7627900dc3ea45db23123b2`
 - **Source repository:** https://github.com/ShalyX/docket-resolve
 
 The public demo is callable without a bearer token. The same service supports `DOCKET_AUTH_MODE=required` with bearer-token-to-tenant profiles for remote MCP agents; tenant-scoped case reads and writes are covered by the included tests.
@@ -43,7 +43,7 @@ npm test
 npm run check
 ```
 
-The suite contains 40 passing tests covering Gemini adapter validation, evidence retrieval and digest checks, all-failed retrieval handling, persistence, idempotency, authentication, tenant isolation, MCP discovery, the full case lifecycle, proportional settlement, manual review, and the reviewer workspace.
+The suite contains 47 passing tests covering Gemini adapter validation, evidence retrieval and digest checks, all-failed retrieval handling, persistence, retry-safe model calls, authentication and MCP scope enforcement, tenant isolation, MCP discovery, the full case lifecycle, proportional settlement, manual review, and the reviewer workspace.
 
 The controlled demo evidence is reachable from the deployed service at `/fixtures/evidence/ev-smoke.txt`, `/fixtures/evidence/ev-docs.txt`, and `/fixtures/evidence/ev-errors.txt`. These are sample evidence artifacts for repeatable verification; the AI review provider is Gemini, not a fixture provider. The all-failed evidence path remains an explicit regression test.
 
@@ -65,7 +65,8 @@ The example agreement weighs API delivery at 50%, documentation at 30%, and edge
 - Prompt-injection text inside evidence is not treated as policy.
 - Requests and evidence are not written to request logs.
 - The Gemini credential is server-side only and is excluded from the submitted source.
-- The included JSON file store is durable for a single process or single-host deployment; a multi-instance launch should replace it with a transactional shared database.
+- The included JSON file store is persistent for a single process or single-host deployment; a serverless or multi-instance launch should replace it with a transactional shared database.
+- The public deployment is an anonymous hackathon sandbox with a best-effort per-process rate limit. It must not be used for private evidence or represented as a production tenant.
 
 ## Rights
 

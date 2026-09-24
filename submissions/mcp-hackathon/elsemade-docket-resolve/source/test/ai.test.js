@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { FixtureReviewProvider, GeminiReviewProvider, OpenAIReviewProvider, createReviewProvider } from "../src/ai/providers.js";
-import { reviewAgreement } from "../src/ai/review.js";
+import { ReviewValidationError, reviewAgreement } from "../src/ai/review.js";
 
 function agreement() {
   return {
@@ -60,6 +60,39 @@ test("missing evidence fails closed without inventing a finding", async () => {
   assert.equal(review.findings.length, 0);
   assert.equal(review.reviews[0].score, null);
   assert.equal(review.evaluation.recommendedReleaseAtomic, 0);
+});
+
+test("review rejects duplicate and oversized evidence notes before calling the provider", async () => {
+  const provider = {
+    name: "test-provider",
+    model: "test-model",
+    promptVersion: "test-v1",
+    reviewCriterion: async () => {
+      throw new Error("The provider should not be called.");
+    },
+  };
+  await assert.rejects(
+    reviewAgreement({
+      agreement: agreement(),
+      evidenceContent: [{ id: "e_delivery", content: "one" }, { id: "e_delivery", content: "two" }],
+      provider,
+    }),
+    (error) => error instanceof ReviewValidationError && error.code === "INVALID_EVIDENCE_CONTENT",
+  );
+
+  const largeAgreement = agreement();
+  largeAgreement.evidence = Array.from({ length: 11 }, (_, index) => ({
+    ...largeAgreement.evidence[0],
+    id: `e_delivery_${index}`,
+  }));
+  await assert.rejects(
+    reviewAgreement({
+      agreement: largeAgreement,
+      evidenceContent: largeAgreement.evidence.map((item) => ({ id: item.id, content: "x".repeat(24_000) })),
+      provider,
+    }),
+    (error) => error instanceof ReviewValidationError && error.code === "EVIDENCE_CONTENT_TOO_LARGE",
+  );
 });
 
 test("invalid provider evidence citations become a review failure", async () => {
@@ -176,7 +209,9 @@ test("Gemini adapter requests schema-constrained JSON and validates the result",
     evidence: agreement().evidence,
   });
 
-  assert.match(request.url, /generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-3\.1-flash-lite:generateContent\?key=test-gemini-key/);
+  assert.match(request.url, /generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-3\.1-flash-lite:generateContent$/);
+  assert.equal(request.options.headers["x-goog-api-key"], "test-gemini-key");
+  assert.doesNotMatch(request.url, /[?&]key=/);
   assert.equal(request.body.generationConfig.responseMimeType, "application/json");
   const responseSchema = request.body.generationConfig.responseSchema;
   assert.equal(responseSchema.type, "object");

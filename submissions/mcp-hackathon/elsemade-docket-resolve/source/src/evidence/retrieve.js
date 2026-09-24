@@ -4,6 +4,7 @@ import { isIP } from "node:net";
 
 const DEFAULT_TIMEOUT_MS = 8_000;
 const DEFAULT_MAX_BYTES = 512 * 1024;
+const DEFAULT_CONCURRENCY = 4;
 
 export class EvidenceRetrievalError extends Error {
   constructor(code, message, details = undefined) {
@@ -17,13 +18,37 @@ export class EvidenceRetrievalError extends Error {
 function isPrivateIpv4(hostname) {
   const parts = hostname.split(".").map((part) => Number.parseInt(part, 10));
   if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
-  const [first, second] = parts;
-  return first === 10 || first === 127 || (first === 169 && second === 254) || (first === 192 && second === 168) || (first === 172 && second >= 16 && second <= 31);
+  const [first, second, third] = parts;
+  return first === 0
+    || first === 10
+    || (first === 100 && second >= 64 && second <= 127)
+    || first === 127
+    || (first === 169 && second === 254)
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && (second === 0 || second === 2 || second === 168))
+    || (first === 198 && (second === 18 || second === 19 || (second === 51 && third === 100)))
+    || (first === 203 && second === 0 && third === 113)
+    || first >= 224;
 }
 
 function isPrivateIpv6(hostname) {
   const normalized = hostname.toLowerCase();
-  return normalized === "::" || normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || /^fe[89ab]/.test(normalized) || normalized.startsWith("::ffff:127.") || normalized.startsWith("::ffff:10.") || normalized.startsWith("::ffff:192.168.") || normalized.startsWith("::ffff:172.");
+  return normalized === "::"
+    || normalized === "::1"
+    || normalized.startsWith("fc")
+    || normalized.startsWith("fd")
+    || normalized.startsWith("2001:db8")
+    || normalized.startsWith("2001:10")
+    || normalized.startsWith("ff")
+    || /^fe[89ab]/.test(normalized)
+    || normalized.startsWith("::ffff:127.")
+    || normalized.startsWith("::ffff:10.")
+    || normalized.startsWith("::ffff:100.")
+    || normalized.startsWith("::ffff:169.254.")
+    || normalized.startsWith("::ffff:192.0.")
+    || normalized.startsWith("::ffff:192.168.")
+    || normalized.startsWith("::ffff:198.18.")
+    || normalized.startsWith("::ffff:172.");
 }
 
 function isPrivateIp(hostname) {
@@ -42,6 +67,12 @@ function assertSafeUrl(uri, allowHosts = [], requireAllowlist = false) {
   if (url.protocol !== "https:") {
     throw new EvidenceRetrievalError("EVIDENCE_URL_UNSAFE", "Evidence retrieval only allows HTTPS URLs.");
   }
+  if (url.username || url.password || url.hash) {
+    throw new EvidenceRetrievalError("EVIDENCE_URL_UNSAFE", "Evidence URI cannot contain credentials or a fragment.");
+  }
+  if (url.port && url.port !== "443") {
+    throw new EvidenceRetrievalError("EVIDENCE_URL_UNSAFE", "Evidence retrieval only allows the HTTPS port.");
+  }
   const hostname = url.hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
   const numericIp = isIP(hostname);
   const privateIp = numericIp === 4 ? isPrivateIpv4(hostname) : numericIp === 6 ? isPrivateIpv6(hostname) : false;
@@ -55,6 +86,23 @@ function assertSafeUrl(uri, allowHosts = [], requireAllowlist = false) {
     throw new EvidenceRetrievalError("EVIDENCE_HOST_NOT_ALLOWED", "Evidence host is outside the configured allowlist.");
   }
   return url;
+}
+
+async function resolveHostWithTimeout(resolveHost, hostname, timeoutMs) {
+  let timer;
+  try {
+    return await Promise.race([
+      resolveHost(hostname, { all: true, verbatim: true }),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new EvidenceRetrievalError("EVIDENCE_TIMEOUT", "Evidence host resolution exceeded its time limit.")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function boundedBody(response, maxBytes) {
@@ -94,13 +142,17 @@ export async function retrieveEvidenceItem(item, {
   const url = assertSafeUrl(item.uri, allowHosts, requireAllowlist);
   const resolvedHostname = url.hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const boundedTimeoutMs = Number.isFinite(timeoutMs)
+    ? Math.min(Math.max(timeoutMs, 250), 30_000)
+    : DEFAULT_TIMEOUT_MS;
+  const timer = setTimeout(() => controller.abort(), boundedTimeoutMs);
   try {
     if (isIP(resolvedHostname) === 0) {
       let resolved;
       try {
-        resolved = await resolveHost(resolvedHostname, { all: true, verbatim: true });
-      } catch {
+        resolved = await resolveHostWithTimeout(resolveHost, resolvedHostname, boundedTimeoutMs);
+      } catch (error) {
+        if (error instanceof EvidenceRetrievalError) throw error;
         throw new EvidenceRetrievalError("EVIDENCE_HOST_RESOLUTION_FAILED", "Evidence host could not be resolved safely.");
       }
       const addresses = Array.isArray(resolved)
@@ -145,14 +197,29 @@ export async function retrieveEvidenceItem(item, {
 }
 
 export async function retrieveAgreementEvidence(agreement, options = {}) {
-  const items = [];
-  const errors = [];
-  for (const evidence of agreement.evidence) {
-    try {
-      items.push(await retrieveEvidenceItem(evidence, options));
-    } catch (error) {
-      errors.push({ evidenceId: evidence.id, code: error.code, message: error.message });
+  const evidence = Array.isArray(agreement?.evidence) ? agreement.evidence : [];
+  const concurrency = Number.isInteger(options.concurrency)
+    ? Math.min(Math.max(options.concurrency, 1), DEFAULT_CONCURRENCY)
+    : DEFAULT_CONCURRENCY;
+  const results = new Array(evidence.length);
+  let cursor = 0;
+
+  async function worker() {
+    while (true) {
+      const index = cursor++;
+      if (index >= evidence.length) return;
+      const item = evidence[index];
+      try {
+        results[index] = { item: await retrieveEvidenceItem(item, options) };
+      } catch (error) {
+        results[index] = { error: { evidenceId: item.id, code: error.code, message: error.message } };
+      }
     }
   }
-  return { items, errors };
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, evidence.length) }, worker));
+  return {
+    items: results.filter((result) => result?.item).map((result) => result.item),
+    errors: results.filter((result) => result?.error).map((result) => result.error),
+  };
 }

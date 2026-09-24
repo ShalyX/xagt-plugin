@@ -144,6 +144,11 @@ enforces response time and byte limits, stores no cookies, and requires the fetc
 to match the agreement before marking evidence verified. It does not yet provide malware scanning
 or tenant-specific connector policies.
 
+The preflight DNS check and the HTTP connection are separate operations in this reference fetcher.
+Do not allow untrusted or attacker-controlled domains in a production allowlist; a hardened
+multi-tenant deployment should use a connector or egress proxy that pins the approved address
+through connection establishment and enforces the same policy on every request.
+
 The reviewer workspace has a deterministic fixture evidence provider for local development. It is
 selected only outside `NODE_ENV=production` and outside the required-auth profile, uses a synthetic
 allowlisted host, and never makes a network call. Production configuration does not inject that

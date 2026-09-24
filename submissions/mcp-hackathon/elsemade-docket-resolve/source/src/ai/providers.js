@@ -257,10 +257,13 @@ export class GeminiReviewProvider {
       "Return only the requested JSON schema.",
     ].join(" ");
     const input = JSON.stringify({ criterion, evidence: evidenceSummary(evidence) });
-    const endpoint = `${this.baseUrl}/models/${encodeURIComponent(this.model)}:generateContent?key=${encodeURIComponent(this.apiKey)}`;
+    const endpoint = `${this.baseUrl}/models/${encodeURIComponent(this.model)}:generateContent`;
     const response = await this.fetchImpl(endpoint, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "x-goog-api-key": this.apiKey,
+      },
       signal,
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },

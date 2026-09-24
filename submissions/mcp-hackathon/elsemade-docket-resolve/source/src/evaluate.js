@@ -8,6 +8,14 @@ const ALLOWED_EVIDENCE_KINDS = new Set([
 ]);
 const ALLOWED_EVIDENCE_RESULTS = new Set(["pass", "fail", "inconclusive"]);
 const MAX_ATOMIC_AMOUNT = Math.floor(Number.MAX_SAFE_INTEGER / 100);
+const MAX_ID_LENGTH = 128;
+const MAX_AGREEMENT_ID_LENGTH = 128;
+const MAX_CRITERIA = 100;
+const MAX_EVIDENCE = 200;
+const MAX_FINDINGS = 200;
+const MAX_DESCRIPTION_LENGTH = 2_000;
+const MAX_RATIONALE_LENGTH = 4_000;
+const MAX_URI_LENGTH = 2_048;
 
 export class EvaluationError extends Error {
   constructor(code, message, details = undefined) {
@@ -28,12 +36,18 @@ function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function assertNonEmptyString(value, field) {
+function assertNonEmptyString(value, field, maxLength = MAX_ID_LENGTH) {
   assert(
     typeof value === "string" && value.trim().length > 0,
     "INVALID_FIELD",
     `${field} must be a non-empty string.`,
     { field },
+  );
+  assert(
+    value.length <= maxLength,
+    "INVALID_FIELD",
+    `${field} must be no longer than ${maxLength} characters.`,
+    { field, maxLength },
   );
 }
 
@@ -73,7 +87,7 @@ function evaluationIdFor(agreement) {
 
 function validateAgreement(agreement) {
   assert(isPlainObject(agreement), "INVALID_BODY", "Request body must be an object.");
-  assertNonEmptyString(agreement.agreementId, "agreementId");
+  assertNonEmptyString(agreement.agreementId, "agreementId", MAX_AGREEMENT_ID_LENGTH);
   assert(isPlainObject(agreement.asset), "INVALID_FIELD", "asset must be an object.", { field: "asset" });
   assertNonEmptyString(agreement.asset.symbol, "asset.symbol");
   assert(
@@ -102,6 +116,9 @@ function validateAgreement(agreement) {
     "INVALID_FIELD", "criteria must contain at least one item.", { field: "criteria" });
   assert(Array.isArray(agreement.evidence), "INVALID_FIELD", "evidence must be an array.", { field: "evidence" });
   assert(Array.isArray(agreement.findings), "INVALID_FIELD", "findings must be an array.", { field: "findings" });
+  assert(agreement.criteria.length <= MAX_CRITERIA, "INVALID_FIELD", `criteria may contain no more than ${MAX_CRITERIA} items.`, { field: "criteria", maxItems: MAX_CRITERIA });
+  assert(agreement.evidence.length <= MAX_EVIDENCE, "INVALID_FIELD", `evidence may contain no more than ${MAX_EVIDENCE} items.`, { field: "evidence", maxItems: MAX_EVIDENCE });
+  assert(agreement.findings.length <= MAX_FINDINGS, "INVALID_FIELD", `findings may contain no more than ${MAX_FINDINGS} items.`, { field: "findings", maxItems: MAX_FINDINGS });
 
   assertUniqueIds(agreement.criteria, "criteria");
   assertUniqueIds(agreement.evidence, "evidence");
@@ -112,7 +129,7 @@ function validateAgreement(agreement) {
   let weightTotal = 0;
 
   for (const criterion of agreement.criteria) {
-    assertNonEmptyString(criterion.description, `criteria.${criterion.id}.description`);
+    assertNonEmptyString(criterion.description, `criteria.${criterion.id}.description`, MAX_DESCRIPTION_LENGTH);
     assert(
       Number.isInteger(criterion.weight) && criterion.weight > 0 && criterion.weight <= 100,
       "INVALID_FIELD",
@@ -130,6 +147,12 @@ function validateAgreement(agreement) {
       "INVALID_FIELD",
       `Criterion ${criterion.id} minimumEvidence must be a non-negative integer.`,
       { field: "criteria.minimumEvidence", id: criterion.id },
+    );
+    assert(
+      criterion.minimumEvidence <= MAX_EVIDENCE,
+      "INVALID_FIELD",
+      `Criterion ${criterion.id} minimumEvidence must be no greater than ${MAX_EVIDENCE}.`,
+      { field: "criteria.minimumEvidence", id: criterion.id, max: MAX_EVIDENCE },
     );
     weightTotal += criterion.weight;
   }
@@ -155,10 +178,10 @@ function validateAgreement(agreement) {
       { field: "evidence.kind", id: item.id },
     );
     assert(
-      typeof item.uri === "string" && /^https:\/\//i.test(item.uri),
+      typeof item.uri === "string" && item.uri.length <= MAX_URI_LENGTH && /^https:\/\//i.test(item.uri),
       "INVALID_FIELD",
-      `Evidence ${item.id} uri must use HTTPS.`,
-      { field: "evidence.uri", id: item.id },
+      `Evidence ${item.id} uri must use HTTPS and be no longer than ${MAX_URI_LENGTH} characters.`,
+      { field: "evidence.uri", id: item.id, maxLength: MAX_URI_LENGTH },
     );
     assert(
       typeof item.digest === "string" && /^sha256:[a-f0-9]{64}$/i.test(item.digest),
@@ -191,7 +214,7 @@ function validateAgreement(agreement) {
       { evaluator: finding.evaluator, criterionId: finding.criterionId },
     );
     evaluatorCriterionPairs.add(evaluatorCriterionKey);
-    assertNonEmptyString(finding.rationale, `findings.${finding.id}.rationale`);
+    assertNonEmptyString(finding.rationale, `findings.${finding.id}.rationale`, MAX_RATIONALE_LENGTH);
     assert(
       Number.isFinite(finding.score) && finding.score >= 0 && finding.score <= 100,
       "INVALID_FIELD",
@@ -210,7 +233,14 @@ function validateAgreement(agreement) {
       `Finding ${finding.id} must cite at least one evidence item.`,
       { field: "findings.evidenceIds", id: finding.id },
     );
+    assert(
+      finding.evidenceIds.length <= MAX_EVIDENCE,
+      "INVALID_FIELD",
+      `Finding ${finding.id} may cite no more than ${MAX_EVIDENCE} evidence items.`,
+      { field: "findings.evidenceIds", id: finding.id, maxItems: MAX_EVIDENCE },
+    );
     for (const evidenceId of finding.evidenceIds) {
+      assertNonEmptyString(evidenceId, `findings.${finding.id}.evidenceIds`);
       const evidence = evidenceById.get(evidenceId);
       assert(
         evidence,

@@ -57,9 +57,9 @@ function agreement() {
   };
 }
 
-async function connectedClient() {
+async function connectedClient(options = {}) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const server = createDocketMcpServer({ reviewProvider: new FixtureReviewProvider() });
+  const server = createDocketMcpServer({ reviewProvider: new FixtureReviewProvider(), ...options });
   await server.connect(serverTransport);
   const client = new Client({ name: "docket-test-client", version: "1.0.0" });
   await client.connect(clientTransport);
@@ -138,6 +138,27 @@ test("MCP review exposes cited findings and a safe review boundary", async () =>
   }
 });
 
+test("MCP write tools reject a read-only identity", async () => {
+  const { client, server } = await connectedClient({ scopes: ["cases:read"] });
+  try {
+    const created = await client.callTool({
+      name: "docket_create_case",
+      arguments: { agreement: agreement(), idempotencyKey: "read-only-create" },
+    });
+    assert.equal(created.isError, true);
+    assert.equal(created.structuredContent.error.code, "AUTH_FORBIDDEN");
+
+    const validated = await client.callTool({
+      name: "docket_validate_agreement",
+      arguments: { agreement: agreement() },
+    });
+    assert.equal(validated.structuredContent.valid, true);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test("MCP Streamable HTTP endpoint serves the same tools", async () => {
   const { client, server } = await connectedHttpClient();
   try {
@@ -167,7 +188,7 @@ test("production-mode MCP flow authenticates agents, persists a case, retrieves 
     DOCKET_AUTH_MODE: "required",
     DOCKET_AUTH_TOKENS: JSON.stringify({
       "agent-a-production-token": { tenantId: "tenant-a", subject: "agent-a", scopes: ["*"] },
-      "agent-b-production-token": { tenantId: "tenant-b", subject: "agent-b", scopes: ["*"] },
+      "agent-b-production-token": { tenantId: "tenant-b", subject: "agent-b", scopes: ["cases:read"] },
     }),
   });
   const store = new CaseStore({ filePath: join(directory, "cases.json") });
@@ -215,6 +236,10 @@ test("production-mode MCP flow authenticates agents, persists a case, retrieves 
     const crossTenant = await otherClient.callTool({ name: "docket_get_case", arguments: { caseId } });
     assert.equal(crossTenant.isError, true);
     assert.equal(crossTenant.structuredContent.error.code, "CASE_NOT_FOUND");
+
+    const forbiddenWrite = await otherClient.callTool({ name: "docket_create_case", arguments: { agreement: input, idempotencyKey: "reader-create-1" } });
+    assert.equal(forbiddenWrite.isError, true);
+    assert.equal(forbiddenWrite.structuredContent.error.code, "AUTH_FORBIDDEN");
   } finally {
     await client.close();
     await otherClient.close();

@@ -71,7 +71,7 @@ AI review adds a second boundary: model output is untrusted even when it matches
 The current upgrade slice persists cases, retrieved evidence metadata/content, review output,
 recommendations, and immutable case events in the file-backed store at `DOCKET_STORAGE_PATH`.
 Mutations accept idempotency keys and every read is scoped by the authenticated tenant. This is a
-durable single-host implementation for the hackathon slice; a shared transactional database,
+persistent single-host implementation for the hackathon slice; a shared transactional database,
 optimistic concurrency, backups, and key management are still required before multi-instance launch.
 
 ## Failure behavior

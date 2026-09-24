@@ -15,6 +15,10 @@ export function deploymentConfig(environment = process.env) {
     .split(",")
     .map((host) => host.trim().toLowerCase())
     .filter(Boolean);
+  const publicRateLimitPerMinute = Number.parseInt(environment.DOCKET_PUBLIC_RATE_LIMIT_PER_MINUTE ?? "30", 10);
+  if (!Number.isInteger(publicRateLimitPerMinute) || publicRateLimitPerMinute < 1 || publicRateLimitPerMinute > 10_000) {
+    throw new Error("DOCKET_PUBLIC_RATE_LIMIT_PER_MINUTE must be an integer from 1 to 10000.");
+  }
   return {
     commit:
       environment.XAGT_COMMIT ??
@@ -34,5 +38,6 @@ export function deploymentConfig(environment = process.env) {
     evidenceFetcher: fixtureEvidence ? fixtureEvidenceFetcher : undefined,
     evidenceResolver: fixtureEvidence ? fixtureEvidenceResolver : undefined,
     evidenceFixture: fixtureEvidence,
+    publicRateLimitPerMinute,
   };
 }

@@ -2,7 +2,7 @@
 
 ## Deployment binding
 
-- Review commit: `c410c6068c9642320b6c7431034773048934d8d9`
+- Review commit: `a05274938888c1ead7627900dc3ea45db23123b2`
 - API base URL: https://docket-resolve.vercel.app/v1
 - Health URL: https://docket-resolve.vercel.app/health
 - Deployment proof URL: https://docket-resolve.vercel.app/.well-known/xagent-verification.json
@@ -10,13 +10,13 @@
 Expected health response:
 
 ```json
-{"status":"ok","commit":"c410c6068c9642320b6c7431034773048934d8d9"}
+{"status":"ok","commit":"a05274938888c1ead7627900dc3ea45db23123b2"}
 ```
 
 Expected deployment proof:
 
 ```json
-{"schemaVersion":1,"slug":"elsemade-docket-resolve","commit":"c410c6068c9642320b6c7431034773048934d8d9"}
+{"schemaVersion":1,"slug":"elsemade-docket-resolve","commit":"a05274938888c1ead7627900dc3ea45db23123b2"}
 ```
 
 ## 1. Deterministic settlement-kernel check
@@ -90,4 +90,4 @@ Malformed JSON returns HTTP 400, oversized bodies return 413, a non-JSON content
 
 ## Notes
 
-The public demo uses server-side Gemini configuration and no browser-held provider credential. Docket does not move funds. The file-backed case store is appropriate for the single deployed service used for this verification; a multi-instance production deployment should use a shared transactional database.
+The public demo uses server-side Gemini configuration and no browser-held provider credential. Docket does not move funds. The deployment is an anonymous hackathon sandbox: do not submit private evidence. Its file-backed store and per-process rate limit are reference controls, not shared serverless persistence or distributed production quotas. A multi-instance production deployment should use authenticated tenants, a shared transactional database, and a shared rate limiter.

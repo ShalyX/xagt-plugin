@@ -4,6 +4,7 @@ import { z } from "zod";
 import { evaluateAgreement, EvaluationError } from "../evaluate.js";
 import { createReviewProvider } from "../ai/providers.js";
 import { reviewAgreement } from "../ai/review.js";
+import { requireScope } from "../auth.js";
 import { retrieveAgreementEvidence } from "../evidence/retrieve.js";
 import { CaseStore } from "../persistence/store.js";
 
@@ -50,6 +51,19 @@ function result(output) {
   };
 }
 
+function invalidMutationKey(idempotencyKey, required) {
+  if (typeof idempotencyKey !== "string" || !idempotencyKey.trim()) {
+    return required
+      ? errorResult({ code: "IDEMPOTENCY_KEY_REQUIRED", message: "Mutating production tools require an idempotencyKey." })
+      : null;
+  }
+  const normalized = idempotencyKey.trim();
+  if (normalized.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(normalized)) {
+    return errorResult({ code: "IDEMPOTENCY_KEY_INVALID", message: "idempotencyKey must be 1–200 characters using letters, numbers, dot, underscore, colon, or hyphen." });
+  }
+  return null;
+}
+
 function evaluationOutput(evaluation) {
   return {
     ...evaluation,
@@ -68,8 +82,11 @@ export function createDocketMcpServer({
   evidenceAllowHosts = [],
   evidenceRequireAllowlist = false,
   evidenceResolver,
+  requireIdempotency = false,
+  scopes = ["*"],
 } = {}) {
   const caseStore = store ?? new CaseStore();
+  const identity = { scopes };
   const server = new McpServer(
     {
       name: "docket",
@@ -95,6 +112,9 @@ export function createDocketMcpServer({
     },
     async ({ agreement, idempotencyKey }) => {
       try {
+        requireScope(identity, "cases:write");
+        const invalidKey = invalidMutationKey(idempotencyKey, requireIdempotency);
+        if (invalidKey) return invalidKey;
         const normalized = { ...agreement, findings: Array.isArray(agreement.findings) ? agreement.findings : [] };
         evaluateAgreement(normalized);
         return result(await caseStore.createCase({
@@ -117,8 +137,13 @@ export function createDocketMcpServer({
       inputSchema: z.object({ caseId: z.string().min(1) }),
     },
     async ({ caseId }) => {
-      const record = await caseStore.getCase({ tenantId, caseId });
-      return record ? result(record) : errorResult({ code: "CASE_NOT_FOUND", message: "The case was not found." });
+      try {
+        requireScope(identity, "cases:read");
+        const record = await caseStore.getCase({ tenantId, caseId });
+        return record ? result(record) : errorResult({ code: "CASE_NOT_FOUND", message: "The case was not found." });
+      } catch (error) {
+        return errorResult(error);
+      }
     },
   );
 
@@ -135,23 +160,35 @@ export function createDocketMcpServer({
     },
     async ({ caseId, idempotencyKey }) => {
       try {
-        const record = await caseStore.getCase({ tenantId, caseId });
-        if (!record) return errorResult({ code: "CASE_NOT_FOUND", message: "The case was not found." });
-        const retrieval = await retrieveAgreementEvidence(record.agreement, {
-          fetchImpl: evidenceFetcher,
-          allowHosts: evidenceAllowHosts,
-          requireAllowlist: evidenceRequireAllowlist,
-          resolveHost: evidenceResolver,
-        });
-        const persisted = await caseStore.saveEvidenceRetrieval({
+        requireScope(identity, "cases:write");
+        const invalidKey = invalidMutationKey(idempotencyKey, requireIdempotency);
+        if (invalidKey) return invalidKey;
+        const request = { caseId };
+        return result(await caseStore.runIdempotent({
           tenantId,
-          caseId,
-          subject,
-          items: retrieval.items,
-          errors: retrieval.errors,
+          operation: "retrieve-evidence",
+          scope: caseId,
           idempotencyKey,
-        });
-        return result({ caseId, retrieval, persisted });
+          request,
+        }, async () => {
+          const record = await caseStore.getCase({ tenantId, caseId });
+          if (!record) throw Object.assign(new Error("The case was not found."), { code: "CASE_NOT_FOUND" });
+          const retrieval = await retrieveAgreementEvidence(record.agreement, {
+            fetchImpl: evidenceFetcher,
+            allowHosts: evidenceAllowHosts,
+            requireAllowlist: evidenceRequireAllowlist,
+            resolveHost: evidenceResolver,
+          });
+          return caseStore.saveEvidenceRetrieval({
+            tenantId,
+            caseId,
+            subject,
+            items: retrieval.items,
+            errors: retrieval.errors,
+            idempotencyKey,
+            request,
+          });
+        }));
       } catch (error) {
         return errorResult(error);
       }
@@ -168,6 +205,7 @@ export function createDocketMcpServer({
     },
     async ({ agreement }) => {
       try {
+        requireScope(identity, "cases:read");
         const evaluation = evaluateAgreement(agreement);
         return result({
           valid: true,
@@ -191,6 +229,7 @@ export function createDocketMcpServer({
     },
     async ({ agreement, evidenceContent }) => {
       try {
+        requireScope(identity, "cases:read");
         if (!agreement) return errorResult({ code: "CASE_REFERENCE_REQUIRED", message: "Provide an agreement for stateless review or use caseId." });
         const review = await reviewAgreement({
           agreement,
@@ -214,34 +253,57 @@ export function createDocketMcpServer({
     },
     async ({ caseId, evidenceContent, retrieveEvidence, idempotencyKey }) => {
       try {
+        requireScope(identity, "cases:write");
+        const invalidKey = invalidMutationKey(idempotencyKey, requireIdempotency);
+        if (invalidKey) return invalidKey;
         if (!caseId) return errorResult({ code: "CASE_REFERENCE_REQUIRED", message: "caseId is required for persisted review." });
-        let record = await caseStore.getCase({ tenantId, caseId });
-        if (!record) return errorResult({ code: "CASE_NOT_FOUND", message: "The case was not found." });
-        if (retrieveEvidence) {
-          const retrieval = await retrieveAgreementEvidence(record.agreement, {
-            fetchImpl: evidenceFetcher,
-            allowHosts: evidenceAllowHosts,
-            requireAllowlist: evidenceRequireAllowlist,
-            resolveHost: evidenceResolver,
+        const request = {
+          caseId,
+          retrieveEvidence: Boolean(retrieveEvidence),
+          evidenceContent: evidenceContent.length > 0 ? evidenceContent : null,
+        };
+        return result(await caseStore.runIdempotent({
+          tenantId,
+          operation: "review-case",
+          scope: caseId,
+          idempotencyKey,
+          request,
+        }, async () => {
+          let record = await caseStore.getCase({ tenantId, caseId });
+          if (!record) throw Object.assign(new Error("The case was not found."), { code: "CASE_NOT_FOUND" });
+          if (retrieveEvidence) {
+            const retrieval = await retrieveAgreementEvidence(record.agreement, {
+              fetchImpl: evidenceFetcher,
+              allowHosts: evidenceAllowHosts,
+              requireAllowlist: evidenceRequireAllowlist,
+              resolveHost: evidenceResolver,
+            });
+            await caseStore.saveEvidenceRetrieval({
+              tenantId,
+              caseId,
+              subject,
+              items: retrieval.items,
+              errors: retrieval.errors,
+              idempotencyKey: `${idempotencyKey ?? "review"}:retrieve`,
+            });
+            record = await caseStore.getCase({ tenantId, caseId });
+          }
+          const reviewEvidenceContent = evidenceContent.length > 0 ? evidenceContent : record.evidenceContent;
+          const review = await reviewAgreement({
+            agreement: record.agreement,
+            evidenceContent: reviewEvidenceContent,
+            provider: reviewProvider,
           });
-          await caseStore.saveEvidenceRetrieval({
+          return caseStore.saveReview({
             tenantId,
             caseId,
             subject,
-            items: retrieval.items,
-            errors: retrieval.errors,
-            idempotencyKey: `${idempotencyKey ?? "review"}:retrieve`,
+            review,
+            evidenceContent: reviewEvidenceContent,
+            idempotencyKey,
+            request,
           });
-          record = await caseStore.getCase({ tenantId, caseId });
-        }
-        const reviewEvidenceContent = evidenceContent.length > 0 ? evidenceContent : record.evidenceContent;
-        const review = await reviewAgreement({
-          agreement: record.agreement,
-          evidenceContent: reviewEvidenceContent,
-          provider: reviewProvider,
-        });
-        const persisted = await caseStore.saveReview({ tenantId, caseId, subject, review, evidenceContent: reviewEvidenceContent, idempotencyKey });
-        return result({ ...review, caseId, persisted });
+        }));
       } catch (error) {
         return errorResult(error);
       }
@@ -259,12 +321,17 @@ export function createDocketMcpServer({
     async ({ agreement, caseId, idempotencyKey }) => {
       try {
         if (!caseId) {
+          requireScope(identity, "cases:read");
           if (!agreement) return errorResult({ code: "CASE_REFERENCE_REQUIRED", message: "Provide an agreement or caseId." });
           return result(evaluationOutput(evaluateAgreement(agreement)));
         }
+        requireScope(identity, "cases:write");
+        const invalidKey = invalidMutationKey(idempotencyKey, requireIdempotency);
+        if (invalidKey) return invalidKey;
         const record = await caseStore.getCase({ tenantId, caseId });
         if (!record) return errorResult({ code: "CASE_NOT_FOUND", message: "The case was not found." });
         if (!record.review) return errorResult({ code: "CASE_NOT_REVIEWED", message: "Review the case before resolving it." });
+        if (!record.review.readyToResolve) return errorResult({ code: "CASE_REVIEW_NOT_READY", message: "The case requires human review before it can be resolved." });
         const evaluation = evaluationOutput(evaluateAgreement({ ...record.agreement, findings: record.review.findings }));
         const persisted = await caseStore.saveResolution({ tenantId, caseId, subject, evaluation, idempotencyKey });
         return result({ ...evaluation, caseId, persisted });

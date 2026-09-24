@@ -1,9 +1,13 @@
 import { evaluateAgreement } from "../evaluate.js";
 import { AIProviderError } from "./providers.js";
-import { reviewFindingSchema } from "./schemas.js";
+import { evidenceContentSchema, reviewFindingSchema } from "./schemas.js";
 
 const DEFAULT_MIN_CONFIDENCE = 0.65;
 const DEFAULT_CRITICAL_MIN_CONFIDENCE = 0.8;
+const MAX_EVIDENCE_CONTENT_ITEMS = 200;
+const MAX_REVIEW_CONTENT_BYTES = 256 * 1024;
+const MIN_REVIEW_TIMEOUT_MS = 250;
+const MAX_REVIEW_TIMEOUT_MS = 30_000;
 
 export class ReviewValidationError extends Error {
   constructor(code, message, details = undefined) {
@@ -20,6 +24,40 @@ function contentForEvidence(evidence, evidenceContent) {
     ...item,
     content: contentById.get(item.id) ?? null,
   }));
+}
+
+function validateReviewInputs({ agreement, evidenceContent, timeoutMs }) {
+  evaluateAgreement({ ...agreement, findings: [] });
+  if (!Array.isArray(evidenceContent) || evidenceContent.length > MAX_EVIDENCE_CONTENT_ITEMS) {
+    throw new ReviewValidationError(
+      "INVALID_EVIDENCE_CONTENT",
+      `evidenceContent must contain no more than ${MAX_EVIDENCE_CONTENT_ITEMS} items.`,
+    );
+  }
+  const ids = new Set();
+  for (const item of evidenceContent) {
+    const checked = evidenceContentSchema.safeParse(item);
+    if (!checked.success) {
+      throw new ReviewValidationError("INVALID_EVIDENCE_CONTENT", "Each evidence content item needs a bounded id and content.");
+    }
+    if (ids.has(item.id)) {
+      throw new ReviewValidationError("INVALID_EVIDENCE_CONTENT", `Evidence content contains duplicate id ${item.id}.`);
+    }
+    ids.add(item.id);
+  }
+  if (!Number.isFinite(timeoutMs) || timeoutMs < MIN_REVIEW_TIMEOUT_MS || timeoutMs > MAX_REVIEW_TIMEOUT_MS) {
+    throw new ReviewValidationError(
+      "INVALID_REVIEW_TIMEOUT",
+      `Review timeout must be between ${MIN_REVIEW_TIMEOUT_MS} and ${MAX_REVIEW_TIMEOUT_MS} milliseconds.`,
+    );
+  }
+  const reviewPolicy = agreement.reviewPolicy ?? {};
+  for (const [field, fallback] of [["minimumConfidence", DEFAULT_MIN_CONFIDENCE], ["criticalMinimumConfidence", DEFAULT_CRITICAL_MIN_CONFIDENCE]]) {
+    const value = reviewPolicy[field] ?? fallback;
+    if (!Number.isFinite(value) || value < 0 || value > 1) {
+      throw new ReviewValidationError("INVALID_REVIEW_POLICY", `${field} must be between 0 and 1.`);
+    }
+  }
 }
 
 function validateFinding({ finding, criterion, evidence }) {
@@ -82,7 +120,14 @@ export async function reviewAgreement({
   signal,
   timeoutMs = 12_000,
 }) {
+  validateReviewInputs({ agreement, evidenceContent, timeoutMs });
   const content = contentForEvidence(agreement.evidence, evidenceContent);
+  if (Buffer.byteLength(JSON.stringify(content), "utf8") > MAX_REVIEW_CONTENT_BYTES) {
+    throw new ReviewValidationError(
+      "EVIDENCE_CONTENT_TOO_LARGE",
+      `Evidence supplied to the reviewer must be no larger than ${MAX_REVIEW_CONTENT_BYTES} bytes.`,
+    );
+  }
   const reviewPolicy = agreement.reviewPolicy ?? {};
   const minConfidence = reviewPolicy.minimumConfidence ?? DEFAULT_MIN_CONFIDENCE;
   const criticalMinConfidence =

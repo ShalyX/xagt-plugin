@@ -13,6 +13,7 @@ import { createOpenApiDocument } from "./openapi.js";
 import { CaseStore, CaseStoreError } from "./persistence/store.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
+const DEFAULT_PUBLIC_RATE_LIMIT_PER_MINUTE = 30;
 const PUBLIC_FILES = new Map([
   ["/", { contentType: "text/html; charset=utf-8", body: readFileSync(new URL("../public/index.html", import.meta.url)) }],
   ["/app.js", { contentType: "text/javascript; charset=utf-8", body: readFileSync(new URL("../public/app.js", import.meta.url)) }],
@@ -65,7 +66,7 @@ function readJsonBody(request, { optional = false } = {}) {
   });
 }
 
-function sendJson(response, status, body, requestId, allowedOrigin) {
+function sendJson(response, status, body, requestId, allowedOrigin, extraHeaders = {}) {
   const payload = JSON.stringify(body);
   response.writeHead(status, {
     "access-control-allow-headers": "content-type, authorization, idempotency-key",
@@ -76,6 +77,7 @@ function sendJson(response, status, body, requestId, allowedOrigin) {
     "content-type": "application/json; charset=utf-8",
     "x-content-type-options": "nosniff",
     "x-request-id": requestId,
+    ...extraHeaders,
   });
   response.end(payload);
 }
@@ -105,14 +107,40 @@ function errorBody(code, message, requestId, details = undefined) {
   return { error };
 }
 
-function idempotencyKey(request) {
+class HttpRequestError extends Error {
+  constructor(code, message, status = 400) {
+    super(message);
+    this.name = "HttpRequestError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+function idempotencyKey(request, { required = false } = {}) {
   const value = request.headers["idempotency-key"];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  if (typeof value !== "string" || !value.trim()) {
+    if (required) throw new HttpRequestError("IDEMPOTENCY_KEY_REQUIRED", "Mutating production requests require an Idempotency-Key header.");
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (normalized.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(normalized)) {
+    throw new HttpRequestError("IDEMPOTENCY_KEY_INVALID", "Idempotency-Key must be 1–200 characters using letters, numbers, dot, underscore, colon, or hyphen.");
+  }
+  return normalized;
 }
 
 function routeCaseId(pathname) {
   const match = /^\/v1\/cases\/([^/]+)(?:\/(retrieve|review|resolve))?$/.exec(pathname);
-  return match ? { caseId: decodeURIComponent(match[1]), action: match[2] ?? null } : null;
+  if (!match) return null;
+  let caseId;
+  try {
+    caseId = decodeURIComponent(match[1]);
+  } catch {
+    return { invalid: true };
+  }
+  return /^[A-Za-z0-9_-]{1,128}$/.test(caseId)
+    ? { caseId, action: match[2] ?? null }
+    : { invalid: true };
 }
 
 function evaluationOutput(evaluation) {
@@ -121,6 +149,33 @@ function evaluationOutput(evaluation) {
     recommendationOnly: true,
     fundsMoved: false,
     source: "docket-settlement-kernel",
+  };
+}
+
+function createRateLimiter(limitPerMinute) {
+  const buckets = new Map();
+  const windowMs = 60_000;
+  const limit = Number.isInteger(limitPerMinute) && limitPerMinute > 0
+    ? limitPerMinute
+    : DEFAULT_PUBLIC_RATE_LIMIT_PER_MINUTE;
+
+  return {
+    consume(key) {
+      const now = Date.now();
+      const previous = buckets.get(key);
+      const bucket = previous && now - previous.startedAt < windowMs
+        ? previous
+        : { startedAt: now, count: 0 };
+      if (bucket.count >= limit) return false;
+      bucket.count += 1;
+      buckets.set(key, bucket);
+      if (buckets.size > 10_000) {
+        for (const [bucketKey, value] of buckets) {
+          if (now - value.startedAt >= windowMs) buckets.delete(bucketKey);
+        }
+      }
+      return true;
+    },
   };
 }
 
@@ -136,12 +191,18 @@ export function createRequestHandler({
   evidenceAllowHosts = [],
   evidenceRequireAllowlist = false,
   evidenceResolver,
+  publicRateLimitPerMinute = DEFAULT_PUBLIC_RATE_LIMIT_PER_MINUTE,
 }) {
   const caseStore = store ?? new CaseStore({ filePath: storagePath });
   const requireEvidenceAllowlist = evidenceRequireAllowlist || auth.required;
+  const publicRateLimiter = createRateLimiter(publicRateLimitPerMinute);
   return async function requestHandler(request, response) {
     const requestId = randomUUID();
-    const origin = `http://${request.headers.host ?? "localhost"}`;
+    const forwardedProtocol = String(request.headers["x-forwarded-proto"] ?? "").split(",")[0].trim().toLowerCase();
+    const protocol = forwardedProtocol === "https" || forwardedProtocol === "http"
+      ? forwardedProtocol
+      : request.socket?.encrypted ? "https" : "http";
+    const origin = `${protocol}://${request.headers.host ?? "localhost"}`;
     const url = new URL(request.url ?? "/", origin);
     const protectedRequest = url.pathname === "/mcp" || url.pathname.startsWith("/v1/");
     let identity = null;
@@ -169,9 +230,26 @@ export function createRequestHandler({
       return;
     }
 
+    const publicMutation = Boolean(
+      identity
+      && !identity.authenticated
+      && request.method === "POST"
+      && (url.pathname === "/mcp" || url.pathname.startsWith("/v1/")),
+    );
+    if (publicMutation && !publicRateLimiter.consume(request.socket?.remoteAddress ?? "unknown")) {
+      sendJson(
+        response,
+        429,
+        errorBody("RATE_LIMITED", "The public demo rate limit was reached. Retry in one minute.", requestId),
+        requestId,
+        allowedOrigin,
+        { "retry-after": "60" },
+      );
+      return;
+    }
+
     if (url.pathname === "/mcp") {
       try {
-        requireScope(identity, "cases:read");
         const handler = toNodeHandler(createDocketMcpHandler({
           reviewProvider,
           store: caseStore,
@@ -181,6 +259,8 @@ export function createRequestHandler({
           evidenceAllowHosts,
           evidenceRequireAllowlist: requireEvidenceAllowlist,
           evidenceResolver,
+          requireIdempotency: auth.required,
+          scopes: identity.scopes,
         }));
         await handler(request, response);
       } catch (error) {
@@ -261,11 +341,11 @@ export function createRequestHandler({
           tenantId: identity.tenantId,
           subject: identity.subject,
           agreement,
-          idempotencyKey: idempotencyKey(request),
+          idempotencyKey: idempotencyKey(request, { required: auth.required }),
         });
         sendJson(response, created.replayed ? 200 : 201, created, requestId, allowedOrigin);
       } catch (error) {
-        if (error instanceof AuthError || error instanceof CaseStoreError || error instanceof EvaluationError) {
+        if (error instanceof AuthError || error instanceof CaseStoreError || error instanceof EvaluationError || error instanceof HttpRequestError) {
           sendJson(response, error.status ?? 422, errorBody(error.code, error.message, requestId, error.details), requestId, allowedOrigin);
           return;
         }
@@ -284,6 +364,10 @@ export function createRequestHandler({
     }
 
     const caseRoute = routeCaseId(url.pathname);
+    if (caseRoute?.invalid) {
+      sendJson(response, 400, errorBody("INVALID_CASE_ID", "The case ID is malformed.", requestId), requestId, allowedOrigin);
+      return;
+    }
     if (caseRoute && request.method === "GET" && !caseRoute.action) {
       try {
         requireScope(identity, "cases:read");
@@ -302,6 +386,7 @@ export function createRequestHandler({
 
     if (caseRoute && request.method === "POST") {
       try {
+        const mutationKey = idempotencyKey(request, { required: auth.required });
         requireScope(identity, "cases:write");
         let record = await caseStore.getCase({ tenantId: identity.tenantId, caseId: caseRoute.caseId });
         if (!record) {
@@ -310,58 +395,82 @@ export function createRequestHandler({
         }
 
         if (caseRoute.action === "retrieve") {
-          const retrieval = await retrieveAgreementEvidence(record.agreement, {
-            fetchImpl: evidenceFetcher,
-            allowHosts: evidenceAllowHosts,
-            requireAllowlist: requireEvidenceAllowlist,
-            resolveHost: evidenceResolver,
-          });
-          const saved = await caseStore.saveEvidenceRetrieval({
+          const retrievalRequest = { caseId: caseRoute.caseId };
+          const saved = await caseStore.runIdempotent({
             tenantId: identity.tenantId,
-            caseId: caseRoute.caseId,
-            subject: identity.subject,
-            items: retrieval.items,
-            errors: retrieval.errors,
-            idempotencyKey: idempotencyKey(request),
-          });
-          sendJson(response, 200, { ...saved, retrieval }, requestId, allowedOrigin);
-          return;
-        }
-
-        if (caseRoute.action === "review") {
-          const body = await readJsonBody(request, { optional: true });
-          if (body?.retrieveEvidence) {
+            operation: "retrieve-evidence",
+            scope: caseRoute.caseId,
+            idempotencyKey: mutationKey,
+            request: retrievalRequest,
+          }, async () => {
             const retrieval = await retrieveAgreementEvidence(record.agreement, {
               fetchImpl: evidenceFetcher,
               allowHosts: evidenceAllowHosts,
               requireAllowlist: requireEvidenceAllowlist,
               resolveHost: evidenceResolver,
             });
-            await caseStore.saveEvidenceRetrieval({
+            return caseStore.saveEvidenceRetrieval({
               tenantId: identity.tenantId,
               caseId: caseRoute.caseId,
               subject: identity.subject,
               items: retrieval.items,
               errors: retrieval.errors,
-              idempotencyKey: `${idempotencyKey(request) ?? "review"}:retrieve`,
+              idempotencyKey: mutationKey,
+              request: retrievalRequest,
             });
-            record = await caseStore.getCase({ tenantId: identity.tenantId, caseId: caseRoute.caseId });
-          }
-          const reviewEvidenceContent = Array.isArray(body?.evidenceContent) ? body.evidenceContent : record.evidenceContent;
-          const review = await reviewAgreement({
-            agreement: record.agreement,
-            evidenceContent: reviewEvidenceContent,
-            provider: reviewProvider,
           });
-          const saved = await caseStore.saveReview({
-            tenantId: identity.tenantId,
+          sendJson(response, 200, saved, requestId, allowedOrigin);
+          return;
+        }
+
+        if (caseRoute.action === "review") {
+          const body = await readJsonBody(request, { optional: true });
+          const reviewRequest = {
             caseId: caseRoute.caseId,
-            subject: identity.subject,
-            review,
-            evidenceContent: reviewEvidenceContent,
-            idempotencyKey: idempotencyKey(request),
+            retrieveEvidence: Boolean(body?.retrieveEvidence),
+            evidenceContent: Array.isArray(body?.evidenceContent) ? body.evidenceContent : null,
+          };
+          const saved = await caseStore.runIdempotent({
+            tenantId: identity.tenantId,
+            operation: "review-case",
+            scope: caseRoute.caseId,
+            idempotencyKey: mutationKey,
+            request: reviewRequest,
+          }, async () => {
+            if (body?.retrieveEvidence) {
+              const retrieval = await retrieveAgreementEvidence(record.agreement, {
+                fetchImpl: evidenceFetcher,
+                allowHosts: evidenceAllowHosts,
+                requireAllowlist: requireEvidenceAllowlist,
+                resolveHost: evidenceResolver,
+              });
+              await caseStore.saveEvidenceRetrieval({
+                tenantId: identity.tenantId,
+                caseId: caseRoute.caseId,
+                subject: identity.subject,
+                items: retrieval.items,
+                errors: retrieval.errors,
+                idempotencyKey: `${mutationKey ?? "review"}:retrieve`,
+              });
+              record = await caseStore.getCase({ tenantId: identity.tenantId, caseId: caseRoute.caseId });
+            }
+            const reviewEvidenceContent = Array.isArray(body?.evidenceContent) ? body.evidenceContent : record.evidenceContent;
+            const review = await reviewAgreement({
+              agreement: record.agreement,
+              evidenceContent: reviewEvidenceContent,
+              provider: reviewProvider,
+            });
+            return caseStore.saveReview({
+              tenantId: identity.tenantId,
+              caseId: caseRoute.caseId,
+              subject: identity.subject,
+              review,
+              evidenceContent: reviewEvidenceContent,
+              idempotencyKey: mutationKey,
+              request: reviewRequest,
+            });
           });
-          sendJson(response, 200, { ...review, caseId: caseRoute.caseId, persisted: saved }, requestId, allowedOrigin);
+          sendJson(response, 200, saved, requestId, allowedOrigin);
           return;
         }
 
@@ -370,19 +479,23 @@ export function createRequestHandler({
             sendJson(response, 409, errorBody("CASE_NOT_REVIEWED", "Review the case before resolving it.", requestId), requestId, allowedOrigin);
             return;
           }
+          if (!record.review.readyToResolve) {
+            sendJson(response, 409, errorBody("CASE_REVIEW_NOT_READY", "The case requires human review before it can be resolved.", requestId), requestId, allowedOrigin);
+            return;
+          }
           const evaluation = evaluationOutput(evaluateAgreement({ ...record.agreement, findings: record.review.findings }));
           const saved = await caseStore.saveResolution({
             tenantId: identity.tenantId,
             caseId: caseRoute.caseId,
             subject: identity.subject,
             evaluation,
-            idempotencyKey: idempotencyKey(request),
+            idempotencyKey: mutationKey,
           });
           sendJson(response, 200, { ...evaluation, persisted: saved }, requestId, allowedOrigin);
           return;
         }
       } catch (error) {
-        if (error instanceof AuthError || error instanceof CaseStoreError || error instanceof EvaluationError || error instanceof ReviewValidationError) {
+        if (error instanceof AuthError || error instanceof CaseStoreError || error instanceof EvaluationError || error instanceof ReviewValidationError || error instanceof HttpRequestError) {
           sendJson(response, error.status ?? 422, errorBody(error.code, error.message, requestId, error.details), requestId, allowedOrigin);
           return;
         }

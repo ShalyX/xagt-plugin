@@ -18,17 +18,17 @@ The primary product claim is proportional settlement, not generic AI review:
 
 ## 1.1 Current execution status
 
-The first local vertical slice and the next production slice are implemented and reviewable. They
-include the provider-neutral AI review boundary, a labeled fixture provider, an optional
-structured-output OpenAI adapter, durable tenant-scoped cases/events, idempotent mutations,
+The AI/MCP vertical slice and final hackathon hardening candidate are implemented and reviewable. They
+include the provider-neutral AI review boundary, a Gemini adapter, a labeled fixture test double, an optional
+structured-output OpenAI adapter, persistent single-host tenant-scoped cases/events, idempotent mutations,
 bounded HTTPS evidence retrieval with digest verification, authenticated MCP tools over stdio and
 Streamable HTTP, an authenticated HTTP E2E test, a responsive case workspace, and an end-to-end
 MCP client demo that produces the canonical 230 USDC release / 20 USDC hold recommendation.
 
 The settlement kernel remains the only component that calculates financial fields. Shared
 multi-instance storage, a full OAuth resource-server integration, malware scanning/source
-connectors, a live hosted-model evaluation corpus, and public submission updates remain outside
-this local slice and require review before release.
+connectors, and a live hosted-model evaluation corpus remain outside this hackathon slice. The final
+candidate still requires user approval before its source, deployment, and official submission are updated.
 
 ## 2. Success criteria
 

@@ -35,6 +35,15 @@ test("production configuration never enables local fixture evidence", () => {
   assert.equal(config.evidenceResolver, undefined);
 });
 
+test("explicit public demo auth mode overrides production defaults", () => {
+  const config = deploymentConfig({
+    NODE_ENV: "production",
+    DOCKET_AUTH_MODE: "off",
+    DOCKET_AI_PROVIDER: "fixture",
+  });
+  assert.equal(config.auth.required, false);
+});
+
 test("local fixture evidence matches the sample agreement digests", async () => {
   const fixtures = [
     ["https://evidence.example.test/ev-smoke.txt", "7a06fea670b648b816b370c13260b8ea0e43fbe40407f783b7b48be78d6b6188"],

@@ -20,10 +20,10 @@ The repository currently contains Docket Resolve v0.1:
 - critical-failure caps and evaluator-conflict escalation;
 - proportional release and hold calculations;
 - an HTTP API, OpenAPI document, and reviewer interface;
-- 38 passing tests;
+- 47 passing tests;
 - a Gemini hosted AI review adapter with schema-constrained findings, plus a clearly labeled fixture test double;
 - MCP tools over local stdio and authenticated Streamable HTTP;
-- a durable single-host case/event store with idempotent mutations and tenant isolation;
+- a persistent single-host case/event store with idempotent mutations and tenant isolation;
 - bounded HTTPS evidence retrieval with digest verification;
 - a local-only deterministic fixture evidence provider for the reviewer workspace, with explicit all-failed retrieval coverage;
 - a responsive case workspace UI and production-like MCP workflow;

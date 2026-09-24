@@ -201,3 +201,25 @@ test("requires explicit, bounded asset denomination", () => {
       error instanceof EvaluationError && error.code === "INVALID_FIELD",
   );
 });
+
+test("bounds agreement collections and untrusted text before evaluation", () => {
+  const oversizedCriteria = baseAgreement();
+  oversizedCriteria.criteria = Array.from({ length: 101 }, (_, index) => ({
+    id: `criterion-${index}`,
+    description: "Criterion",
+    weight: 1,
+    critical: false,
+    minimumEvidence: 0,
+  }));
+  assert.throws(
+    () => evaluateAgreement(oversizedCriteria),
+    (error) => error instanceof EvaluationError && error.code === "INVALID_FIELD",
+  );
+
+  const oversizedDescription = baseAgreement();
+  oversizedDescription.criteria[0].description = "x".repeat(2_001);
+  assert.throws(
+    () => evaluateAgreement(oversizedDescription),
+    (error) => error instanceof EvaluationError && error.code === "INVALID_FIELD",
+  );
+});

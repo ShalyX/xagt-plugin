@@ -1,9 +1,8 @@
 import { retrievalMessage, retrievalTone } from "./retrieval-status.js";
 
-const demoEvidenceOrigin = window.location.protocol === "https:"
-  ? window.location.origin
-  : "https://evidence.example.test";
-const demoEvidenceUri = (name) => `${demoEvidenceOrigin}/fixtures/evidence/${name}.txt`;
+const demoEvidenceUri = (name) => window.location.protocol === "https:"
+  ? `${window.location.origin}/fixtures/evidence/${name}.txt`
+  : `https://evidence.example.test/${name}.txt`;
 
 const exampleAgreement = {
   agreementId: "agent-build-2026-019",
@@ -43,6 +42,7 @@ const resultPanel = document.querySelector(".result-panel");
 
 let currentCaseId = null;
 let currentStatus = null;
+let currentReviewReady = false;
 let busy = false;
 
 function setState(message, kind = "") {
@@ -83,9 +83,9 @@ function setBusy(value) {
   busy = value;
   createButton.disabled = value;
   resetButton.disabled = value;
-  reviewButton.disabled = value || !currentCaseId;
-  retrieveButton.disabled = value || !currentCaseId;
-  resolveButton.disabled = value || !currentCaseId || !["reviewed", "manual_review", "resolved"].includes(currentStatus);
+  reviewButton.disabled = value || !currentCaseId || currentStatus === "resolved";
+  retrieveButton.disabled = value || !currentCaseId || currentStatus === "resolved";
+  resolveButton.disabled = value || !currentCaseId || currentStatus !== "reviewed" || !currentReviewReady;
 }
 
 async function api(path, { method = "GET", body, idempotency } = {}) {
@@ -106,6 +106,7 @@ async function api(path, { method = "GET", body, idempotency } = {}) {
 function resetCaseView() {
   currentCaseId = null;
   currentStatus = null;
+  currentReviewReady = false;
   resultPanel.classList.remove("has-result");
   document.querySelector("#case-id").textContent = "NO CASE";
   document.querySelector("#case-status").textContent = "UNFILED";
@@ -237,6 +238,7 @@ function renderRetrieval(retrieval) {
 function renderCase(record) {
   currentCaseId = record.caseId;
   currentStatus = record.status;
+  currentReviewReady = Boolean(record.review?.readyToResolve);
   resultPanel.classList.add("has-result");
   document.querySelector("#case-id").textContent = record.caseId;
   document.querySelector("#case-status").textContent = record.status.replaceAll("_", " ");

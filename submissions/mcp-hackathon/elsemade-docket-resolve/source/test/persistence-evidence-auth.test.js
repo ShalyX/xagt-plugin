@@ -114,6 +114,14 @@ test("evidence retrieval verifies HTTPS content against the declared digest", as
     retrieveEvidenceItem({ ...item, uri: "https://[::1]/private.txt" }, { fetchImpl: async () => new Response(content), allowHosts: ["::1"] }),
     (error) => error instanceof EvidenceRetrievalError && error.code === "EVIDENCE_HOST_BLOCKED",
   );
+  await assert.rejects(
+    retrieveEvidenceItem({ ...item, uri: "https://user:password@evidence.example.test/private.txt" }, { fetchImpl: async () => new Response(content), allowHosts: ["evidence.example.test"] }),
+    (error) => error instanceof EvidenceRetrievalError && error.code === "EVIDENCE_URL_UNSAFE",
+  );
+  await assert.rejects(
+    retrieveEvidenceItem({ ...item, uri: "https://evidence.example.test:8443/private.txt" }, { fetchImpl: async () => new Response(content), allowHosts: ["evidence.example.test"] }),
+    (error) => error instanceof EvidenceRetrievalError && error.code === "EVIDENCE_URL_UNSAFE",
+  );
 });
 
 test("all-failed evidence retrieval remains an explicit failure-handling case", async () => {

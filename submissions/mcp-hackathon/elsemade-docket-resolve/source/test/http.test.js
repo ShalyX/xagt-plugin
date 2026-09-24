@@ -7,13 +7,14 @@ import { createRequestHandler } from "../src/http.js";
 
 const commit = "c".repeat(40);
 
-async function withServer(run) {
+async function withServer(run, options = {}) {
   const server = createServer(
     createRequestHandler({
       commit,
       slug: "elsemade-docket-resolve",
       allowedOrigin: "*",
       reviewProvider: new FixtureReviewProvider(),
+      ...options,
     }),
   );
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -98,6 +99,16 @@ test("serves the controlled demo evidence as a reachable public fixture", async 
   });
 });
 
+test("ships local example URLs that match the fixture evidence provider", async () => {
+  await withServer(async (origin) => {
+    const response = await fetch(`${origin}/app.js`);
+    const source = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(source, /https:\/\/evidence\.example\.test\/\$\{name\}\.txt/);
+    assert.doesNotMatch(source, /evidence\.example\.test\/fixtures\/evidence/);
+  });
+});
+
 test("evaluates a valid agreement over HTTP", async () => {
   await withServer(async (origin) => {
     const response = await fetch(`${origin}/v1/evaluations`, {
@@ -132,6 +143,28 @@ test("reviews evidence over HTTP without giving the reviewer payment authority",
     assert.equal(body.findings[0].evidenceIds[0], "e_delivery");
     assert.equal("recommendedReleaseAtomic" in body, false);
   });
+});
+
+test("rate limits unauthenticated public review requests", async () => {
+  await withServer(async (origin) => {
+    const input = agreement();
+    input.findings = [];
+    const request = () => fetch(`${origin}/v1/reviews`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agreement: input, evidenceContent: [{ id: "e_delivery", content: "The artifact is present." }] }),
+    });
+
+    assert.equal((await request()).status, 200);
+    const limited = await fetch(`${origin}/v1/evaluations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(agreement()),
+    });
+    assert.equal(limited.status, 429);
+    assert.equal(limited.headers.get("retry-after"), "60");
+    assert.equal((await limited.json()).error.code, "RATE_LIMITED");
+  }, { publicRateLimitPerMinute: 1 });
 });
 
 test("returns structured errors for invalid agreements", async () => {
@@ -186,16 +219,26 @@ test("rejects oversized bodies with a structured response", async () => {
 
 test("publishes an OpenAPI document and explicit 404s", async () => {
   await withServer(async (origin) => {
-    const schemaResponse = await fetch(`${origin}/openapi.json`);
+    const schemaResponse = await fetch(`${origin}/openapi.json`, { headers: { "x-forwarded-proto": "https" } });
     const schema = await schemaResponse.json();
     assert.equal(schemaResponse.status, 200);
     assert.equal(schema.openapi, "3.1.0");
     assert.ok(schema.paths["/v1/evaluations"]);
+    assert.match(schema.servers[0].url, /^https:\/\//);
 
     const missingResponse = await fetch(`${origin}/missing`);
     const missing = await missingResponse.json();
     assert.equal(missingResponse.status, 404);
     assert.equal(missing.error.code, "NOT_FOUND");
+  });
+});
+
+test("returns a structured error for malformed case identifiers", async () => {
+  await withServer(async (origin) => {
+    const response = await fetch(`${origin}/v1/cases/%E0%A4%A`);
+    const body = await response.json();
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, "INVALID_CASE_ID");
   });
 });
 

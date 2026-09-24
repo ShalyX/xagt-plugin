@@ -2,9 +2,9 @@
 
 Docket is the settlement control plane for agent-to-agent work. It turns evidence against pre-agreed acceptance criteria into an explainable, proportional release and hold recommendation.
 
-## AI + MCP production upgrade
+## AI + MCP product
 
-The local upgrade now includes the first AI-review and MCP vertical slice. It is intentionally local and has not been published to the live deployment or hackathon submission.
+Docket combines a provider-neutral AI evidence reviewer, a local settlement kernel, persisted case workflows, and an MCP interface. The public hackathon build is available at [docket-resolve.vercel.app](https://docket-resolve.vercel.app), and its source is reviewed through the [official X-Agent submission PR](https://github.com/xagentAI/xagt-plugin/pull/74).
 
 - [Production plan](docs/production-plan.md)
 - [Product specification](docs/product-spec.md)
@@ -38,6 +38,8 @@ Requirements: Node.js 20 or newer.
 npm ci
 npm test
 npm run check
+cp .env.example .env.local
+# Add a server-side GEMINI_API_KEY to .env.local.
 npm start
 ```
 
@@ -60,10 +62,14 @@ The local default uses Gemini review with schema-constrained findings and local-
 
 The fixture evidence is never enabled when `NODE_ENV=production` or when authentication is required. Production agents must supply real HTTPS evidence references, a matching SHA-256 digest, and an explicit host allowlist or connector policy. Gemini free-tier usage is appropriate for public demo evidence only because Google states that free-tier content may be used to improve its products. The missing/unreachable evidence path remains covered by an explicit all-failed regression test.
 
-`demo:mcp:production` exercises the authenticated agent path with durable storage, tenant
+`demo:mcp:production` exercises the authenticated agent path with single-host persisted storage, tenant
 isolation, idempotent retries, bounded evidence retrieval, digest verification, AI review, and
-recommendation-only resolution. It uses a deterministic evidence fixture so it does not make a
-network or model call.
+recommendation-only resolution. The reproducible test workflow uses explicit evidence and review
+test doubles, so it does not make a network or model call and is not the runtime review provider.
+
+### Public demo boundary
+
+The hosted hackathon deployment is an anonymous sandbox, not a private production tenant. Do not submit sensitive or private evidence to it. Its unauthenticated request limit is a best-effort, per-process demo guardrail; multi-instance production requires a shared rate limiter. The file-backed case store is appropriate for the local and single-host reference workflow, but serverless instances do not provide a durable shared database. A real deployment must enable required authentication, use tenant-specific tokens or OAuth, configure an evidence-host allowlist, and replace the store and rate limiter with shared transactional infrastructure.
 
 ## API
 
@@ -131,7 +137,7 @@ The `evaluationId` is derived from a canonical SHA-256 digest of the input. Iden
 - Conflicting evaluators fail closed into manual review.
 - Invalid references, duplicate IDs, malformed JSON, and oversized bodies return structured errors.
 - Cases, review results, retrieval metadata, and immutable lifecycle events are persisted in the
-  file-backed store configured by `DOCKET_STORAGE_PATH`. This is durable for a single process or
+  file-backed store configured by `DOCKET_STORAGE_PATH`. This is persistent for a single process or
   single-host deployment; multi-instance production should replace it with a transactional shared
   database before launch.
 - Request logs never include agreement bodies or evidence content.
@@ -152,6 +158,7 @@ See [docs/verification.md](docs/verification.md) for repeatable reviewer checks 
 | `DOCKET_STORAGE_PATH` | Durable case/event store path | `data/docket-store.json` |
 | `DOCKET_EVIDENCE_ALLOW_HOSTS` | Comma-separated HTTPS evidence host allowlist | empty |
 | `DOCKET_EVIDENCE_REQUIRE_ALLOWLIST` | Require the evidence allowlist even outside required auth mode | `false` |
+| `DOCKET_PUBLIC_RATE_LIMIT_PER_MINUTE` | Per-process limit for unauthenticated POST requests | `30` |
 | `DOCKET_EVIDENCE_FIXTURE` | Enable local-only deterministic evidence fixtures | `true` in local fixture mode; never in production |
 | `DOCKET_AI_PROVIDER` | `gemini`, `openai`, or explicit `fixture` test double | `gemini` |
 | `DOCKET_AI_MODEL` | Hosted review model | `gemini-3.1-flash-lite` |
